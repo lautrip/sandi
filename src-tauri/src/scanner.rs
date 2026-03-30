@@ -134,7 +134,7 @@ pub async fn scan_directory(
 
     // 3. Insert into database (sequentially to avoid locking issues, or let sqlx handle it)
     for track in tracks {
-        let _ = crate::db::add_track(state.clone(), track).await;
+        let _ = add_track(state.clone(), track).await;
     }
 
     Ok(())
@@ -185,7 +185,7 @@ pub async fn add_folder_to_playlist_recursive(
                         channels:     meta.channels.map(|v| v as i32),
                         has_artwork:  meta.has_artwork,
                     };
-                    if let Ok(id) = crate::db::add_track(state.clone(), track).await {
+                    if let Ok(id) = add_track(state.clone(), track).await {
                         track_ids.push(id);
                     }
                 }

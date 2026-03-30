@@ -662,7 +662,6 @@ function App() {
   useEffect(() => { rateTrackRef.current = rateTrack; }, [rateTrack]);
 
   const triggerAction = useCallback((action) => {
-    console.log("[trigger-js] execute:", action, "amount:", seekAmountRef.current);
     if (action === "playPause") togglePlayRef.current();
     if (action === "seekForward") seekRef.current(seekAmountRef.current);
     if (action === "seekBackward") seekRef.current(-seekAmountRef.current);
@@ -701,7 +700,6 @@ function App() {
 
   useEffect(() => {
     const unlistenAction = listen("execute-action", (event) => {
-      console.log("[global-act] received from rust:", event.payload);
       triggerAction(event.payload);
     });
     return () => { unlistenAction.then(f => f()); };
@@ -717,7 +715,6 @@ function App() {
     const unlistenRated = listen("track-rated", (event) => {
       const { path, rating } = event.payload;
       const normPath = path.normalize();
-      console.log("Track rated event received:", normPath, "Rating:", rating);
       
       setTracks(prev => prev.map(t => t.path.normalize() === normPath ? { ...t, rating } : t));
       setPlaylistTracks(prev => prev.map(t => t.path.normalize() === normPath ? { ...t, rating } : t));

@@ -50,19 +50,6 @@ impl AudioState {
 
     // ── public helpers (used by shortcut_manager) ────────────────────────────
 
-    /// Seek relative to current position; returns new absolute position.
-    pub fn seek_by(&self, delta_secs: i64) -> Result<u64, String> {
-        {
-            if self.playing_path.lock().unwrap().is_none() { return Ok(0); }
-        }
-        let current = self.current_secs();
-        let new_pos = (current as i64 + delta_secs).max(0) as u64;
-        self.sink.lock().unwrap()
-            .try_seek(Duration::from_secs(new_pos))
-            .map_err(|e| e.to_string())?;
-        self.record_play(new_pos);
-        Ok(new_pos)
-    }
 
     pub fn do_pause(&self) -> Result<(), String> {
         self.record_pause();
@@ -99,7 +86,6 @@ impl AudioState {
 
         if same_track {
             // Native seek — no file re-open (works for offset == 0 too)
-            println!("Native seek to {}s", offset_secs);
             self.sink.lock().unwrap()
                 .try_seek(Duration::from_secs(offset_secs))
                 .map_err(|e| e.to_string())?;
