@@ -351,7 +351,7 @@ function App() {
     const saved = localStorage.getItem("sandi-seek-amount");
     return saved !== null ? parseInt(saved, 10) : 10;
   });
-  const [sortConfig, setSortConfig] = useState({ key: 'title', direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState({ key: 'artist', direction: 'asc' });
   const [colWidths, setColWidths] = useState(() => {
     try {
       const saved = localStorage.getItem("sandi-col-widths");
