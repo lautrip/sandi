@@ -1,8 +1,8 @@
-# Project Status: Lunar Audio (2026-03-26)
+# Project Status: Sandi Audio (2026-03-30)
 
 ## Backup Created
-- **Path**: `/Users/ltr/.gemini/antigravity/playground/crimson-lunar-BACKUP-2026-03-26`
-- **Timestamp**: 2026-03-26 04:58
+- **Path**: `/Users/ltr/.gemini/antigravity/playground/sandi-BACKUP-2026-03-30`
+- **Timestamp**: 2026-03-30 15:44
 
 ## Recent Accomplishments
 1. **Move to Trash**: Safer file management using native macOS Trash API.

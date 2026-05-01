@@ -1,3 +1,7 @@
+* {
+  box-sizing: border-box;
+}
+
 :root {
   --bg-color: #000000;
   --panel-bg: #000000;
@@ -210,15 +214,21 @@ input, textarea {
 
 .track-list th {
   text-align: left;
-  padding: 12px;
+  padding: 12px 0;
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid rgba(255, 255, 255, 0.05); /* Subtle column line */
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 1px;
   position: relative;
   user-select: none;
   cursor: default;
+  overflow: visible;
+}
+
+.track-list th:last-child {
+  border-right: none;
 }
 
 .track-list th:hover {
@@ -228,18 +238,27 @@ input, textarea {
 
 .resizer {
   position: absolute;
-  right: -5px;
+  right: -1px;
   top: 0;
   height: 100%;
-  width: 15px; 
+  width: 8px; /* Slightly narrower but still grab-able */
   background: transparent;
   cursor: col-resize;
   z-index: 1000;
   pointer-events: auto;
 }
 
-.resizer:hover {
-  background: rgba(0, 153, 204, 0.5); /* Show the resizer line on hover */
+.resizer:hover, .resizer.active {
+  background: var(--accent-color);
+  opacity: 0.5;
+  width: 2px;
+  right: 0;
+}
+
+/* Global Resize Cursor */
+.is-resizing, .is-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .track-item {
@@ -247,7 +266,7 @@ input, textarea {
 }
 
 .track-item td {
-  padding: 12px;
+  padding: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

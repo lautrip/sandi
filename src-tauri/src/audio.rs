@@ -4,14 +4,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub struct AudioState {
-    pub sink:          Arc<Mutex<rodio::Sink>>,
-    pub queue:         Arc<Mutex<Vec<String>>>,
-    pub current_index: Arc<Mutex<Option<usize>>>,
-    pub playing_path:  Arc<Mutex<Option<String>>>,
-    // Position tracking for Rust-side seek (global shortcuts)
-    play_started_at:   Arc<Mutex<Option<Instant>>>,
-    play_position:     Arc<Mutex<u64>>,
-    pub last_nav_at:   Arc<Mutex<Option<Instant>>>,
+    pub sink:            Arc<Mutex<rodio::Sink>>,
+    pub queue:           Arc<Mutex<Vec<String>>>,
+    pub current_index:   Arc<Mutex<Option<usize>>>,
+    pub playing_path:    Arc<Mutex<Option<String>>>,
+    pub play_started_at: Arc<Mutex<Option<Instant>>>,
+    pub play_position:   Arc<Mutex<u64>>,
+    pub last_nav_at:     Arc<Mutex<Option<Instant>>>,
+    pub volume:          Arc<Mutex<f32>>,
 }
 
 impl AudioState {
@@ -24,6 +24,7 @@ impl AudioState {
             play_started_at: Arc::new(Mutex::new(None)),
             play_position:   Arc::new(Mutex::new(0)),
             last_nav_at:     Arc::new(Mutex::new(None)),
+            volume:          Arc::new(Mutex::new(0.5)),
         }
     }
 
@@ -106,6 +107,9 @@ impl AudioState {
                 .map_err(|e| format!("Decoder error: {}", e))?;
             sink.append(source);
 
+            // Re-apply current volume
+            sink.set_volume(*self.volume.lock().unwrap());
+
             if offset_secs > 0 {
                 sink.try_seek(Duration::from_secs(offset_secs))
                     .map_err(|e| e.to_string())?;
@@ -158,6 +162,7 @@ pub fn stop_audio(state: tauri::State<'_, AudioState>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn set_volume(state: tauri::State<'_, AudioState>, volume: f32) -> Result<(), String> {
+    *state.volume.lock().unwrap() = volume;
     let sink = state.sink.lock().map_err(|e| e.to_string())?;
     sink.set_volume(volume);
     Ok(())

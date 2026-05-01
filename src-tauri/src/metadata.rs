@@ -1,7 +1,7 @@
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::config::WriteOptions;
-use lofty::tag::{ItemKey, ItemValue, TagItem, TagType};
+use lofty::tag::{ItemKey, ItemValue, Tag, TagItem, TagType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -130,6 +130,8 @@ pub fn set_rating(path: &str, rating: u8) -> Result<(), String> {
             let id3_val = match rating { 1 => 1, 2 => 64, 3 => 128, 4 => 196, 5 => 255, _ => 0 };
             let mut data = vec![0u8]; // email byte (empty)
             data.push(id3_val);
+            // Add 4 bytes of 0 for counter (optional but recommended for compatibility)
+            data.extend_from_slice(&[0, 0, 0, 0]);
             tag.insert(TagItem::new(ItemKey::Unknown("POPM".to_string()), ItemValue::Binary(data)));
         }
         TagType::Mp4Ilst => {
@@ -146,7 +148,8 @@ pub fn set_rating(path: &str, rating: u8) -> Result<(), String> {
         }
     }
 
-    tag.save_to_path(path, WriteOptions::default()).map_err(|e| e.to_string())
+    tagged_file.save_to_path(path, WriteOptions::default()).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -156,9 +159,11 @@ pub fn update_metadata(path: String, metadata: AudioMetadata) -> Result<(), Stri
         .read()
         .map_err(|e| e.to_string())?;
 
-    let tag = tagged_file
-        .primary_tag_mut()
-        .ok_or_else(|| "No tag found to update".to_string())?;
+    if tagged_file.primary_tag().is_none() {
+        let tag_type = tagged_file.primary_tag_type();
+        tagged_file.insert_tag(Tag::new(tag_type));
+    }
+    let tag = tagged_file.primary_tag_mut().expect("Tag should exist now");
 
     macro_rules! set_str {
         ($method:ident, $val:expr) => {
@@ -195,6 +200,8 @@ pub fn update_metadata(path: String, metadata: AudioMetadata) -> Result<(), Stri
                 let id3_val = match rating { 1 => 1, 2 => 64, 3 => 128, 4 => 196, 5 => 255, _ => 0 };
                 let mut popm_data = vec![0u8]; // email (empty)
                 popm_data.push(id3_val);
+                // Add 4 bytes of 0 for counter (optional but recommended for compatibility)
+                popm_data.extend_from_slice(&[0, 0, 0, 0]);
                 tag.insert(TagItem::new(
                     ItemKey::Unknown("POPM".to_string()),
                     ItemValue::Binary(popm_data),
@@ -215,6 +222,7 @@ pub fn update_metadata(path: String, metadata: AudioMetadata) -> Result<(), Stri
         }
     }
 
-    tag.save_to_path(&path, WriteOptions::default()).map_err(|e| e.to_string())?;
+    // Use tagged_file.save_to_path instead of tag.save_to_path for better reliability
+    tagged_file.save_to_path(&path, WriteOptions::default()).map_err(|e| e.to_string())?;
     Ok(())
 }

@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 const ALL_COLS = [
@@ -192,6 +193,8 @@ function App() {
     const saved = localStorage.getItem("sandi-volume");
     return saved !== null ? parseFloat(saved) : 0.5;
   });
+  const [isMuted, setIsMuted] = useState(false);
+  const [prevVolume, setPrevVolume] = useState(0.5);
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem("sandi-active-tab") || "library";
   });
@@ -262,6 +265,7 @@ function App() {
   const [playlistSubmenu, setPlaylistSubmenu] = useState(null);
   const [isCreatingPlaylist, setIsCreatingPlaylist] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState("");
+  const [isResizing, setIsResizing] = useState(null);
 
   const colMenuRef = useRef(null);
 
@@ -289,17 +293,20 @@ function App() {
   const startResizing = (col, e) => {
     e.preventDefault();
     e.stopPropagation();
+    setIsResizing(col);
     const startX = e.clientX;
     const startWidth = colWidths[col] || 100;
     
     const onMouseMove = (moveE) => {
       const delta = moveE.clientX - startX;
-      const newWidth = Math.max(20, startWidth + delta);
+      const newWidth = Math.max(1, startWidth + delta);
       setColWidths(prev => ({ ...prev, [col]: newWidth }));
     };
     const onMouseUp = () => {
+      setIsResizing(null);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      saveSetting("col-widths", colWidthsRef.current);
     };
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
@@ -379,6 +386,7 @@ function App() {
   const tracksRef = useRef(tracks);
   const selectedIdsRef = useRef(selectedIds);
   const sortConfigRef = useRef(sortConfig);
+  const colWidthsRef = useRef(colWidths);
 
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { currentTrackRef.current = currentTrack; }, [currentTrack]);
@@ -387,6 +395,7 @@ function App() {
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
   useEffect(() => { selectedIdsRef.current = selectedIds; }, [selectedIds]);
   useEffect(() => { sortConfigRef.current = sortConfig; }, [sortConfig]);
+  useEffect(() => { colWidthsRef.current = colWidths; }, [colWidths]);
 
   // --- SETTINGS PERSISTENCE ---
 
@@ -771,9 +780,20 @@ function App() {
     syncGlobalShortcuts();
   }, [keyBindings]);
 
+  // Immediate audio update
   useEffect(() => {
-    saveSetting("volume", volume.toString());
-    invoke("set_volume", { volume });
+    // Apply logarithmic curve (v = x^2) for more natural feel
+    const audioVolume = isMuted ? 0 : volume * volume;
+    invoke("set_volume", { volume: audioVolume });
+  }, [volume, isMuted]);
+
+  // Debounced persistence
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      saveSetting("volume", volume.toString());
+      localStorage.setItem("sandi-volume", volume.toString());
+    }, 300);
+    return () => clearTimeout(timer);
   }, [volume]);
 
   useEffect(() => {
@@ -801,10 +821,6 @@ function App() {
   useEffect(() => {
     saveSetting("col-order", colOrder);
   }, [colOrder]);
-
-  useEffect(() => {
-    saveSetting("col-widths", colWidths);
-  }, [colWidths]);
 
   useEffect(() => {
     if (selectedMidiDevice !== null) {
@@ -858,9 +874,21 @@ function App() {
         if (match) setSelectedPlaylist(match);
       }
     } catch (e) {
-      console.error("Load playlists error:", e);
+      console.error("Folder playlist error:", e);
     }
-  }
+  };
+
+  const createPlaylistFromFolder = async (folderName, folderPath) => {
+    try {
+      console.log("[frontend] createPlaylistFromFolder", { folderName, folderPath });
+      const playlistId = await invoke("create_playlist", { name: folderName });
+      await invoke("add_folder_to_playlist_recursive", { playlistId, folderPath });
+      loadPlaylists();
+    } catch (e) {
+      console.error("Create playlist from folder error:", e);
+      alert(`Error: ${e}`);
+    }
+  };
 
   useEffect(() => {
     if (activeTab === "playlist" && selectedPlaylist) {
@@ -1232,6 +1260,11 @@ function App() {
     .map(k => ALL_COLS.find(c => c.key === k))
     .filter(c => c && (c.key === 'title' || visibleCols[c.key])), [colOrder, visibleCols]);
 
+  const totalTableWidth = useMemo(() => {
+    const colsSum = activeCols.reduce((sum, col) => sum + (colWidths[col.key] || 100), 0);
+    return colsSum + 40; // 40px for the "+" control column
+  }, [activeCols, colWidths]);
+
   const visibleColCount = useMemo(() => activeCols.length + 1, [activeCols]);
 
 
@@ -1279,7 +1312,6 @@ function App() {
   };
 
   const handleRemoveSelectedFromPlaylist = async () => {
-
     if (!selectedPlaylist) return;
     try {
       console.log("[frontend] handleRemoveSelectedFromPlaylist", { playlistId: selectedPlaylist.id, trackIds: selectedIds });
@@ -1294,36 +1326,58 @@ function App() {
   };
 
   const renderCell = (key, t) => {
+    const content = (() => {
+      switch (key) {
+        case "cover":
+          return <Artwork track={t} />;
+        case "rating":
+          return (
+            <div 
+              className="rating-stars-clickable" 
+              style={{ display: "flex", gap: "2px" }}
+              onClick={(e) => {
+                e.stopPropagation();
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const starWidth = rect.width / 5;
+                const rating = Math.ceil(x / starWidth);
+                rateTrack(t, rating);
+              }}
+            >
+              {[1, 2, 3, 4, 5].map(r => (
+                <span 
+                  key={r} 
+                  style={{ color: r <= (t.rating || 0) ? "var(--accent-color)" : "rgba(255,255,255,0.1)" }}
+                >
+                  {r <= (t.rating || 0) ? "★" : "☆"}
+                </span>
+              ))}
+            </div>
+          );
+        case "duration":
+          return <span>{t.duration ? `${Math.floor(t.duration/60)}:${(t.duration%60).toString().padStart(2,"0")}` : "--:--"}</span>;
+        case "bitrate":
+          return <span>{t.bitrate ? `${t.bitrate} kbps` : "-"}</span>;
+        case "sample_rate":
+          return <span>{t.sample_rate ? `${(t.sample_rate/1000).toFixed(1)} kHz` : "-"}</span>;
+        case "channels":
+          return <span>{t.channels === 1 ? "Mono" : t.channels === 2 ? "Stereo" : t.channels || "-"}</span>;
+        default:
+          return <span>{t[key] || "-"}</span>;
+      }
+    })();
 
-
-    switch (key) {
-      case "cover":
-        return <td key={key} className="artwork-cell"><Artwork track={t} /></td>;
-
-      case "rating":
-        return (
-          <td 
-            key={key} 
-            className={t.rating > 0 ? "rating-highlight" : "rating-empty"}
-          >
-            {t.rating > 0 ? "★".repeat(t.rating) : "☆☆☆☆☆"}
-          </td>
-        );
-      case "duration":
-        return <td key={key}>{t.duration ? `${Math.floor(t.duration/60)}:${(t.duration%60).toString().padStart(2,"0")}` : "--:--"}</td>;
-      case "bitrate":
-        return <td key={key}>{t.bitrate ? `${t.bitrate} kbps` : "-"}</td>;
-      case "sample_rate":
-        return <td key={key}>{t.sample_rate ? `${(t.sample_rate/1000).toFixed(1)} kHz` : "-"}</td>;
-      case "channels":
-        return <td key={key}>{t.channels === 1 ? "Mono" : t.channels === 2 ? "Stereo" : t.channels || "-"}</td>;
-      default:
-        return <td key={key} title={t[key] || "-"}>{t[key] || "-"}</td>;
-    }
+    return (
+      <td key={key} className={key === "cover" ? "artwork-cell" : ""} title={t[key] || "-"}>
+        <div style={{ padding: "12px", width: "100%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+          {content}
+        </div>
+      </td>
+    );
   };
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${isResizing ? "is-resizing" : ""}`}>
       <div className="main-layout">
         {["sidebar", "main", "info"].map((colId) => {
           if (colId === "sidebar") {
@@ -1497,7 +1551,13 @@ function App() {
                 <section className="content-body" style={{ display: "flex", flex: 1, minHeight: 0 }}>
                   <div style={{ flex: 1, overflow: "auto" }}>
                     {(activeTab === "library" || activeTab === "playlist") && (
-                      <table className="track-list" style={{ tableLayout: "fixed" }}>
+                      <table 
+                        className="track-list" 
+                        style={{ 
+                          tableLayout: "fixed",
+                          width: totalTableWidth
+                        }}
+                      >
                         <thead>
                           <tr>
                             {activeCols.map(({ key, label }) => (
@@ -1506,19 +1566,19 @@ function App() {
                                 onClick={() => { requestSort(key); }}
                                  style={{
                                    width: colWidths[key] ?? 100,
-                                   minWidth: colWidths[key] ?? 100,
+                                   minWidth: 0,
                                    maxWidth: colWidths[key] ?? 100,
                                    position: "relative",
                                    zIndex: 1
                                  }}
                               >
-                                <div style={{ display: "flex", alignItems: "center", width: "100%", height: "100%" }}>
-                                  <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                <div style={{ display: "flex", alignItems: "center", width: "100%", height: "100%", padding: "0 12px", minWidth: 0 }}>
+                                  <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
                                     {label} {sortConfig.key === key && (sortConfig.direction === "asc" ? "↑" : "↓")}
                                   </span>
                                   </div>
                                 <div 
-                                    className="resizer" 
+                                    className={`resizer ${isResizing === key ? "active" : ""}`}
                                     draggable={false} 
                                     onMouseDown={(e) => { e.stopPropagation(); startResizing(key, e); }}
                                     style={{ pointerEvents: "auto" }} 
@@ -1861,6 +1921,27 @@ function App() {
                     value={editingTrack.album || ""} 
                     onChange={(e) => setEditingTrack({...editingTrack, album: e.target.value})}
                   />
+                  
+                  <label style={{ fontSize: "12px", color: "var(--text-secondary)" }}>RATING</label>
+                  <div style={{ display: "flex", gap: "5px", fontSize: "20px", cursor: "pointer" }}>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <span 
+                        key={star}
+                        onClick={() => setEditingTrack({ ...editingTrack, rating: star })}
+                        style={{ color: star <= (editingTrack.rating || 0) ? "var(--accent-color)" : "rgba(255,255,255,0.1)" }}
+                      >
+                        {star <= (editingTrack.rating || 0) ? "★" : "☆"}
+                      </span>
+                    ))}
+                    {(editingTrack.rating || 0) > 0 && (
+                      <span 
+                        onClick={() => setEditingTrack({ ...editingTrack, rating: 0 })}
+                        style={{ fontSize: "12px", marginLeft: "10px", opacity: 0.5, alignSelf: "center" }}
+                      >
+                        Clear
+                      </span>
+                    )}
+                  </div>
 
                   <div style={{ display: "flex", gap: "10px", marginTop: "16px" }}>
                     <button 
@@ -1951,7 +2032,31 @@ function App() {
             />
             <span style={{ fontSize: "10px", color: "var(--text-secondary)" }}>s</span>
           </div>
-          <span>🔊</span>
+          <span 
+            onClick={() => {
+              if (isMuted) {
+                // Restore volume - ensuring it's not silent
+                const targetVolume = prevVolume > 0 ? prevVolume : 0.5;
+                setVolume(targetVolume);
+                setIsMuted(false);
+              } else {
+                if (volume > 0) {
+                  // Standard mute: save current volume and silence
+                  setPrevVolume(volume);
+                  setVolume(0);
+                  setIsMuted(true);
+                } else {
+                  // If already at 0 volume but not "system-muted", 
+                  // treat click as an "unmute" to a default audible level.
+                  setVolume(0.5);
+                  setIsMuted(false);
+                }
+              }
+            }}
+            style={{ cursor: "pointer", userSelect: "none" }}
+          >
+            {isMuted || volume === 0 ? "🔇" : volume < 0.5 ? "🔉" : "🔊"}
+          </span>
           <input
             type="range"
             min="0"
@@ -1959,8 +2064,9 @@ function App() {
             step="0.01"
             value={volume}
             onChange={(e) => {
-              setVolume(e.target.value);
-              invoke("set_volume", { volume: parseFloat(e.target.value) });
+              const val = parseFloat(e.target.value);
+              setVolume(val);
+              if (val > 0) setIsMuted(false);
             }}
           />
         </div>
@@ -1986,59 +2092,94 @@ function App() {
         >
           {contextMenu.isFolder ? (
             /* Folder Context Menu */
-            <div 
-              className="context-menu-item"
-              onMouseEnter={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                setPlaylistSubmenu({ x: rect.right, y: rect.top });
-              }}
-              style={{ 
-                padding: "8px 12px", 
-                cursor: "pointer", 
-                fontSize: "13px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: "8px",
-                position: "relative",
-                borderRadius: "4px"
-              }}
-            >
-              <span>➕ Add Folder to Playlist</span>
-              <span style={{ opacity: 0.5, fontSize: "10px" }}>▶</span>
-              
-              {playlistSubmenu && (
-                <div className="glass" style={{
-                  position: "fixed",
-                  left: playlistSubmenu.x,
-                  top: playlistSubmenu.y,
-                  background: "#0a0a0a",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  padding: "4px",
-                  borderRadius: "4px",
-                  minWidth: "150px",
-                  boxShadow: "0 10px 25px rgba(0,0,0,0.5)"
-                }}>
-                  <div 
-                    className="context-menu-item" 
-                    style={{ padding: "8px 12px", fontSize: "13px", color: "var(--accent-color)", borderRadius: "4px" }}
-                    onClick={(e) => { e.stopPropagation(); createPlaylist(); setContextMenu(null); }}
-                  >
-                    + New Playlist...
-                  </div>
-                  {playlists.map(p => (
+            <>
+              <div 
+                className="context-menu-item"
+                onMouseEnter={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setPlaylistSubmenu({ x: rect.right, y: rect.top });
+                }}
+                style={{ 
+                  padding: "8px 12px", 
+                  cursor: "pointer", 
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "8px",
+                  position: "relative",
+                  borderRadius: "4px"
+                }}
+              >
+                <span>➕ Add Folder to Playlist</span>
+                <span style={{ opacity: 0.5, fontSize: "10px" }}>▶</span>
+                
+                {playlistSubmenu && (
+                  <div className="glass" style={{
+                    position: "fixed",
+                    left: playlistSubmenu.x,
+                    top: playlistSubmenu.y,
+                    background: "#0a0a0a",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    padding: "4px",
+                    borderRadius: "4px",
+                    minWidth: "150px",
+                    boxShadow: "0 10px 25px rgba(0,0,0,0.5)"
+                  }}>
                     <div 
-                      key={p.id} 
                       className="context-menu-item" 
-                      style={{ padding: "8px 12px", fontSize: "13px", borderRadius: "4px" }}
-                      onClick={(e) => { e.stopPropagation(); addFolderRecursiveToPlaylist(p.id, contextMenu.folderPath); setContextMenu(null); }}
+                      style={{ padding: "8px 12px", fontSize: "13px", color: "var(--accent-color)", borderRadius: "4px" }}
+                      onClick={(e) => { e.stopPropagation(); createPlaylist(); setContextMenu(null); }}
                     >
-                      {p.name}
+                      + New Playlist...
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+
+                    <div 
+                      className="context-menu-item" 
+                      style={{ 
+                        padding: "8px 12px", 
+                        fontSize: "13px", 
+                        color: "var(--accent-color)", 
+                        borderRadius: "4px",
+                        borderBottom: playlists.length > 0 ? "1px solid rgba(255,255,255,0.05)" : "none",
+                        marginBottom: playlists.length > 0 ? "4px" : "0"
+                      }}
+                      onClick={(e) => { e.stopPropagation(); createPlaylistFromFolder(contextMenu.folderName, contextMenu.folderPath); setContextMenu(null); }}
+                    >
+                      ✨ Create playlist '{contextMenu.folderName}'
+                    </div>
+                    {playlists.map(p => (
+                      <div 
+                        key={p.id} 
+                        className="context-menu-item" 
+                        style={{ padding: "8px 12px", fontSize: "13px", borderRadius: "4px" }}
+                        onClick={(e) => { e.stopPropagation(); addFolderRecursiveToPlaylist(p.id, contextMenu.folderPath); setContextMenu(null); }}
+                      >
+                        {p.name}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div 
+                className="context-menu-item" 
+                onClick={(e) => { e.stopPropagation(); revealItemInDir(contextMenu.folderPath); setContextMenu(null); }}
+                style={{ 
+                  padding: "8px 12px", 
+                  cursor: "pointer", 
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  borderRadius: "4px",
+                  borderTop: "1px solid rgba(255,255,255,0.05)",
+                  marginTop: "4px"
+                }}
+              >
+                <span>📂</span> Show in Finder
+              </div>
+            </>
           ) : (
             /* Track Context Menu */
             <>
@@ -2114,6 +2255,24 @@ function App() {
                   <span>❌</span> {selectedIds.length > 1 ? `Remove ${selectedIds.length} tracks from Playlist` : "Remove from Playlist"}
                 </div>
               )}
+
+              <div 
+                className="context-menu-item" 
+                onClick={(e) => { e.stopPropagation(); revealItemInDir(contextMenu.track.path); setContextMenu(null); }}
+                style={{ 
+                  padding: "8px 12px", 
+                  cursor: "pointer", 
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  borderRadius: "4px",
+                  borderTop: activeTab !== "playlist" ? "1px solid rgba(255,255,255,0.05)" : "none",
+                  marginTop: activeTab !== "playlist" ? "4px" : "0"
+                }}
+              >
+                <span>📂</span> Show in Finder
+              </div>
 
               <div 
                 className="context-menu-item" 
