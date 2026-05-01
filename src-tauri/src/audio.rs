@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tauri::Emitter;
 
 pub struct AudioState {
     pub sink:            Arc<Mutex<rodio::Sink>>,
@@ -128,6 +129,7 @@ impl AudioState {
 #[tauri::command]
 pub fn play_audio(app: tauri::AppHandle, state: tauri::State<'_, AudioState>, path: String) -> Result<(), String> {
     state.internal_play(&path, 0)?;
+    let _ = app.emit("track-changed", &path);
     crate::shortcut_manager::sync_system_metadata(&app, &path);
     Ok(())
 }
@@ -140,6 +142,7 @@ pub fn play_audio_at(
     offset_secs: u64,
 ) -> Result<(), String> {
     state.internal_play(&path, offset_secs)?;
+    let _ = app.emit("track-changed", &path);
     crate::shortcut_manager::sync_system_metadata(&app, &path);
     Ok(())
 }
@@ -185,4 +188,14 @@ pub fn sandi_set_playlist(
         *index_ref = None;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_playback_position(state: tauri::State<'_, AudioState>) -> u64 {
+    state.current_secs()
+}
+
+#[tauri::command]
+pub fn get_current_playing_path(state: tauri::State<'_, AudioState>) -> Option<String> {
+    state.playing_path.lock().unwrap().clone()
 }

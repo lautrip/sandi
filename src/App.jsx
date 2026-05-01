@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import "./App.css";
 
 const ALL_COLS = [
@@ -185,7 +186,152 @@ const Artwork = ({ track }) => {
   );
 };
 
+const VolumeIcon = ({ volume, isMuted }) => {
+  const color = "var(--accent-color)";
+  if (isMuted || volume === 0) return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6"/>
+    </svg>
+  );
+  if (volume < 0.5) return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 5L6 9H2v6h4l5 4V5zM15.54 8.46a5 5 0 0 1 0 7.07"/>
+    </svg>
+  );
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+    </svg>
+  );
+};
+
+const MiniPlayer = () => {
+  const [track, setTrack] = useState(null);
+  const [artwork, setArtwork] = useState(null);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  useEffect(() => {
+    // Initial sync
+    invoke("get_current_playing_path").then(async (path) => {
+      if (path) {
+        const meta = await invoke("get_metadata", { path });
+        setTrack({ ...meta, path });
+        const art = await invoke("get_artwork", { path });
+        setArtwork(art);
+        const pos = await invoke("get_playback_position");
+        setCurrentTime(pos);
+      }
+    });
+
+    const unlistenTrack = listen("track-changed", async (event) => {
+      const path = event.payload;
+      const meta = await invoke("get_metadata", { path });
+      setTrack({ ...meta, path });
+      const art = await invoke("get_artwork", { path });
+      setArtwork(art);
+      setCurrentTime(0);
+    });
+
+    const unlistenRated = listen("track-rated", (event) => {
+      const { path, rating } = event.payload;
+      setTrack(prev => prev?.path === path ? { ...prev, rating } : prev);
+    });
+
+    const interval = setInterval(async () => {
+      try {
+        const pos = await invoke("get_playback_position");
+        setCurrentTime(pos);
+      } catch (e) {
+        console.error("Mini sync error:", e);
+      }
+    }, 1000);
+
+    return () => {
+      unlistenTrack.then(f => f());
+      unlistenRated.then(f => f());
+      clearInterval(interval);
+    };
+  }, []);
+
+  if (!track) {
+    return (
+      <div className="mini-player-container">
+        <div className="mini-artist">No track playing</div>
+      </div>
+    );
+  }
+
+  const formatTime = (s) => {
+    const mins = Math.floor(s / 60);
+    const secs = Math.floor(s % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div 
+      className="mini-player-container" 
+      data-tauri-drag-region 
+      style={{ flexDirection: "column", padding: "10px", gap: "8px" }}
+    >
+      <button 
+        onClick={() => getCurrentWebviewWindow().close()}
+        style={{
+          position: "absolute",
+          top: "6px",
+          right: "6px",
+          background: "rgba(255,255,255,0.05)",
+          border: "none",
+          color: "rgba(255,255,255,0.4)",
+          cursor: "pointer",
+          fontSize: "10px",
+          width: "18px",
+          height: "18px",
+          borderRadius: "50%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 10
+        }}
+      >
+        ✕
+      </button>
+
+      <div style={{ display: "flex", flexDirection: "row", gap: "12px", width: "100%", alignItems: "center" }} data-tauri-drag-region>
+        {artwork ? (
+          <img src={artwork} className="mini-artwork" alt="Cover" data-tauri-drag-region style={{ width: "50px", height: "50px", minWidth: "50px" }} />
+        ) : (
+          <div className="mini-artwork" style={{ background: "#111", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px", width: "50px", height: "50px", minWidth: "50px" }} data-tauri-drag-region>🎵</div>
+        )}
+        <div className="mini-info" data-tauri-drag-region>
+          <div className="mini-title" title={track.title} data-tauri-drag-region style={{ fontSize: "14px" }}>{track.title || "Unknown Title"}</div>
+          <div className="mini-artist" title={track.artist} data-tauri-drag-region style={{ fontSize: "11px" }}>{track.artist || "Unknown Artist"}</div>
+          <div className="mini-rating" data-tauri-drag-region style={{ fontSize: "12px", marginTop: "2px" }}>
+            {track.rating > 0 ? "★".repeat(track.rating) : "☆☆☆☆☆"}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ width: "100%", display: "flex", alignItems: "center", gap: "8px" }} data-tauri-drag-region>
+        <span style={{ fontSize: "10px", color: "var(--text-secondary)", minWidth: "25px", fontFamily: "monospace" }}>{formatTime(currentTime)}</span>
+        <div className="progress-container" style={{ flex: 1, height: "3px", margin: 0 }} data-tauri-drag-region>
+          <div 
+            className="progress-bar" 
+            style={{ width: `${(currentTime / (track.duration || 1)) * 100}%` }} 
+          />
+        </div>
+        <span style={{ fontSize: "10px", color: "var(--text-secondary)", minWidth: "25px", textAlign: "right", fontFamily: "monospace" }}>{formatTime(track.duration || 0)}</span>
+      </div>
+    </div>
+  );
+};
+
 function App() {
+  const [windowLabel] = useState(() => getCurrentWebviewWindow().label);
+
+  if (windowLabel === "mini") {
+    return <MiniPlayer />;
+  }
+
   const [tracks, setTracks] = useState([]);
   const [currentTrack, setCurrentTrack] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -429,6 +575,7 @@ function App() {
       if (settings["midi-device"]) setSelectedMidiDevice(parseInt(settings["midi-device"], 10));
       if (settings["midi-mappings"]) setMidiMappings(JSON.parse(settings["midi-mappings"]));
       if (settings["explorer-root"]) setHomePath(settings["explorer-root"]);
+      if (settings["sort-config"]) setSortConfig(JSON.parse(settings["sort-config"]));
     } catch (e) {
       console.error("[settings] load error:", e);
     }
@@ -571,9 +718,18 @@ function App() {
     currentTimeRef.current = newTime;
     setCurrentTime(newTime);
     if (seekTimeoutRef.current) clearTimeout(seekTimeoutRef.current);
-    seekTimeoutRef.current = setTimeout(() => {
-      invoke("play_audio_at", { path: track.path, offsetSecs: Math.floor(currentTimeRef.current) })
-        .catch(e => console.error("Seek error:", e));
+    seekTimeoutRef.current = setTimeout(async () => {
+      try {
+        await invoke("play_audio_at", { path: track.path, offsetSecs: Math.floor(currentTimeRef.current) });
+        // Immediate sync after seek to confirm position
+        const pos = await invoke("get_playback_position");
+        setCurrentTime(pos);
+        currentTimeRef.current = pos;
+      } catch (e) {
+        console.error("Seek error:", e);
+      } finally {
+        seekTimeoutRef.current = null;
+      }
     }, 200);
   }
 
@@ -702,7 +858,18 @@ function App() {
   useEffect(() => {
     let interval;
     if (isPlaying) {
-      interval = setInterval(() => { setCurrentTime((prev) => prev + 1); }, 1000);
+      interval = setInterval(async () => {
+        try {
+          const pos = await invoke("get_playback_position");
+          // Only update if not currently seeking to avoid jumping
+          if (!seekTimeoutRef.current) {
+            setCurrentTime(pos);
+            currentTimeRef.current = pos;
+          }
+        } catch (e) {
+          console.error("Sync error:", e);
+        }
+      }, 1000);
     }
     return () => clearInterval(interval);
   }, [isPlaying]);
@@ -1230,7 +1397,9 @@ function App() {
     if (sortConfig.key === key && sortConfig.direction === 'asc') {
       direction = 'desc';
     }
-    setSortConfig({ key, direction });
+    const newConfig = { key, direction };
+    setSortConfig(newConfig);
+    saveSetting("sort-config", JSON.stringify(newConfig));
   };
 
   const getSortedTracks = useCallback((tracksToSort, config) => {
@@ -2032,43 +2201,52 @@ function App() {
             />
             <span style={{ fontSize: "10px", color: "var(--text-secondary)" }}>s</span>
           </div>
-          <span 
+          <div 
             onClick={() => {
               if (isMuted) {
-                // Restore volume - ensuring it's not silent
                 const targetVolume = prevVolume > 0 ? prevVolume : 0.5;
                 setVolume(targetVolume);
                 setIsMuted(false);
               } else {
                 if (volume > 0) {
-                  // Standard mute: save current volume and silence
                   setPrevVolume(volume);
                   setVolume(0);
                   setIsMuted(true);
                 } else {
-                  // If already at 0 volume but not "system-muted", 
-                  // treat click as an "unmute" to a default audible level.
                   setVolume(0.5);
                   setIsMuted(false);
                 }
               }
             }}
-            style={{ cursor: "pointer", userSelect: "none" }}
+            style={{ cursor: "pointer", display: "flex", alignItems: "center", opacity: 0.8 }}
           >
-            {isMuted || volume === 0 ? "🔇" : volume < 0.5 ? "🔉" : "🔊"}
-          </span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={volume}
-            onChange={(e) => {
-              const val = parseFloat(e.target.value);
-              setVolume(val);
-              if (val > 0) setIsMuted(false);
+            <VolumeIcon volume={volume} isMuted={isMuted} />
+          </div>
+
+          <div 
+            className="progress-container"
+            style={{ width: "100px", margin: 0, height: "4px" }}
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+              setVolume(pct);
+              setIsMuted(false);
             }}
-          />
+          >
+            <div 
+              className="progress-bar"
+              style={{ width: `${volume * 100}%` }}
+            />
+          </div>
+
+          <button 
+            className="ctrl-btn" 
+            title="Open Mini Player"
+            onClick={() => invoke("open_mini_player")}
+            style={{ fontSize: "18px", marginLeft: "10px", opacity: 0.6 }}
+          >
+            📺
+          </button>
         </div>
       </footer>
 

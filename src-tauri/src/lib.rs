@@ -6,7 +6,7 @@ mod scanner;
 mod shortcuts;
 mod shortcut_manager;
 
-use audio::{AudioState, play_audio, play_audio_at, pause_audio, resume_audio, stop_audio, set_volume, sandi_set_playlist};
+use audio::{AudioState, play_audio, play_audio_at, pause_audio, resume_audio, stop_audio, set_volume, sandi_set_playlist, get_current_playing_path, get_playback_position};
 use metadata::{get_metadata, get_artwork, update_metadata};
 use db::{init_db, add_track, get_tracks, remove_track, delete_track_from_disk, delete_tracks_from_disk, get_playlists, create_playlist, delete_playlist, add_tracks_to_playlist, get_playlist_tracks, remove_tracks_from_playlist, get_track_id_by_path, save_setting, get_settings};
 
@@ -24,6 +24,24 @@ use crate::shortcut_manager::{ShortcutStore, handle_global_shortcut};
 #[tauri::command]
 fn toggle_pin(window: tauri::Window, pinned: bool) -> Result<(), String> {
     window.set_always_on_top(pinned).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn open_mini_player(app: tauri::AppHandle) -> Result<(), String> {
+    let _window = tauri::WebviewWindowBuilder::new(
+        &app,
+        "mini",
+        tauri::WebviewUrl::App("index.html".into())
+    )
+    .title("Now Playing")
+    .inner_size(360.0, 100.0)
+    .resizable(false)
+    .decorations(false)
+    .always_on_top(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+    
+    Ok(())
 }
 
 /// Returns true if the process already has Accessibility trust.
@@ -249,7 +267,10 @@ pub fn run() {
             add_folder_to_playlist_recursive,
             get_track_id_by_path,
             save_setting,
-            get_settings
+            get_settings,
+            open_mini_player,
+            get_current_playing_path,
+            get_playback_position
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
